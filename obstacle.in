@@ -1,0 +1,98 @@
+
+read_restart          Restart_files/3d_obstacle.restart
+
+change_box            all boundary pp pp pp
+region                disturbance block 4e-3 4.08e-3 0 3e-3 0 3e-3 units box
+
+
+#harmonic walls in y direction because it mimics sheath at plasma edge
+#fix 		              ywalls all wall/harmonic ylo EDGE 1e-11 0 5e-3 yhi EDGE 1e-11 0 5e-3 units box
+#fix	                  ywalls all wall/reflect ylo EDGE yhi EDGE
+
+variable 			        debye equal 100e-6 #{lambda}
+variable 			        kappa equal 1/v_debye
+variable 			        cutoff equal 10*v_debye
+neighbor             1e-4 bin
+neigh_modify          delay 0 every 1 check yes page 5000000 one 50000
+pair_style 	     	    coul/debye ${kappa} ${cutoff}
+pair_coeff 	    	    * * ${cutoff}
+
+variable ob1 equal {charge}
+variable obq equal -5*(10^${ob1})
+set group obstacle charge ${obq}
+
+variable			        e_init equal {field}
+fix 		              initial dust efield v_e_init 0.0 0.0
+
+variable              dust_radius equal 1.69e-6
+variable 	      pressure equal {gaspress}
+variable              gammaEp equal 6.0889e-6*(v_pressure/v_dust_radius)
+variable              gamma equal 1.0/v_gammaEp
+fix         	      damping  dust langevin 2000 2000 ${gamma} 38533 tally yes
+fix_modify            damping energy yes  # adds to potential energy
+
+fix 		      moveatoms dust nve
+#fix          		      2D all enforce2d
+
+thermo_style            custom step temp press pe ke epair etotal
+thermo                                  100
+
+
+timestep 1e-4
+
+
+#dump				          visuals obstacle image 1000 im.*.png type type adiam 5e-4 zoom 1.6
+run                   10000
+
+
+variable 			        form_press format pressure %.3f
+variable			        form_init format e_init %.3f
+variable 				form_charge format ob1 %.3f
+
+run                   10000
+
+compute J_i all stress/atom NULL ke pair
+
+
+#variable t equal temp
+#variable p equal press
+#fix t_print all print 1 '$t' file Mag_${form_mag}_E_${form_init}_Press_${form_press}_temp.txt
+#fix p_print all print 1 '$p' file press.txt
+
+
+#dump 			            data dust custom 10 Charge_${form_charge}_E_${form_init}_Press_${form_press}.csv id x y z vx vy vz c_J_i[4]
+run                  10000
+#undump data
+
+#reset_timestep 0
+#run 0
+
+variable T equal temp
+variable V equal vol
+variable dt equal 1e-3
+variable p equal 20
+variable s equal 5 
+variable d equal $p*$s
+variable kB equal 1.38e-23
+
+variable     pxy equal pxy
+variable     pxz equal pxz
+variable     pyz equal pyz
+fix          SS dust ave/correlate $s $p $d &
+             v_pxy v_pxz v_pyz type auto file S0St.dat ave running
+variable     scale equal 1/(${kB}*$T)*$V*$s*${dt}
+variable     v11 equal trap(f_SS[3])*${scale}
+variable     v22 equal trap(f_SS[4])*${scale}
+variable     v33 equal trap(f_SS[5])*${scale}
+thermo_style custom step temp press v_pxy v_pxz v_pyz v_v11 v_v22 v_v33
+run          1000
+variable     v equal (v_v11+v_v22+v_v33)/3.0
+variable den equal (24226*3.053e-14)/(10e-3*3e-3*3e-3)
+variable v_mm equal (v_v/v_den)*1e6
+variable     ndens equal count(dust)/vol
+print        "average viscosity: ${v_mm} [mm2/s] @ $T K, ${ndens} /A^3"
+
+variable lambda_D equal v_debye*1e3
+#unfix SS
+fix v_print all print 1 '${lambda_D} [mm] ${v} [Pa.s] ${v_mm} [mm2/s] @ $T K @ ${form_press} Pa' append reynolds.txt
+run 1
